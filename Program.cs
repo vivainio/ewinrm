@@ -46,7 +46,7 @@ namespace EWinRM
 
         static string WorkPath()
         {
-            var p = Path.Combine(Path.GetTempPath(), "EpicWinRmFiles");
+            var p = Path.Combine(Path.GetTempPath(), "EWinRmFiles");
             if (!Directory.Exists(p))
             {
                 Directory.CreateDirectory(p);
