@@ -7,26 +7,76 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-
+using static System.Console;
 namespace EWinRM
 {
+    public class ProtocolError : Exception
+    {
+        public ProtocolError(string message) : base(message)
+        {
+        }
+    }
+    public static class RespProtocol
+    {
+
+        static void AssertPrefix(string s, char ch)
+        {
+            if (s[0] != ch)
+            {
+                throw new ProtocolError($"Expected '{ch}' got {s[0]})");               
+            }
+        }
+        public static void ReadBulkString(StreamReader src, StreamWriter dest)
+        {
+            // It starts with $ + length + \r\n
+            var line = src.ReadLine();
+            AssertPrefix(line, '$');
+            var numstring = Int32.Parse(line.Substring(1).TrimEnd());
+            PsUtil.CopyStreamNBytes(dest, src, numstring);
+        }
+        public static string ReadSimpleString(StreamReader src)
+        {
+            // starts with +
+            var line = src.ReadLine();
+            AssertPrefix(line, '+');
+
+            return line.Substring(1);
+        }
+    }
     class PsUtil
     {
-       
-        static void CopyStream(StreamWriter dest, StreamReader src)
+        public static void CopyStreamNBytes(StreamWriter dest, StreamReader src, int nbytes)
+        {
+            char[] buf = new char[1024];
+
+            var remaining = nbytes;
+            while (!src.EndOfStream)
+            {
+                var toread = Math.Min(remaining, buf.Length);
+                int len = src.Read(buf, 0, toread);
+                dest.Write(buf, 0, len);
+                remaining -= len;
+                if (remaining == 0)
+                {
+                    // all done!
+                    break;
+                }
+            }
+        }
+
+
+        public static void CopyStream(StreamWriter dest, StreamReader src)
         {
             char[] buf = new char[1024];
             
-            while (true)
+            while (!src.EndOfStream)
             {
                 int len = src.Read(buf, 0, buf.Length);
-                if (len == 0)
-                {
-                    break;
-                }
+                
                 dest.Write(buf, 0, len);
             }
         }
+
 
         public static int RunProcess(StreamWriter outstream, Action<ProcessStartInfo> decorateFn)
         {
@@ -64,7 +114,6 @@ namespace EWinRM
         }
 
         public static string GetTempFileName() => Path.Combine(WorkPath(), Path.GetRandomFileName());
-
     }
 
     class Program
@@ -76,7 +125,7 @@ namespace EWinRM
             if (code != 0)
             {
                 outstream.Write($"\nEE EXITCODE: {code}.");
-                
+
             }
         }
 
@@ -97,13 +146,13 @@ namespace EWinRM
             {
                 resp.Write("EE: Missing autoexec.cmd from zip");
                 return;
-                
+
             }
 
             RunProcessAndWriteExitCode(resp, psi =>
             {
                 psi.WorkingDirectory = targetDir;
-                psi.FileName = "cmd"; 
+                psi.FileName = "cmd";
                 psi.Arguments = "/c autoexec.cmd";
             });
 
@@ -158,54 +207,69 @@ namespace EWinRM
                 psi.Arguments = "/c " + newName;
             });
 
-            File.Delete(newName);            
+            File.Delete(newName);
         }
 
+        static int JobNumber = 0;
+        static string CreateJob()
+        {
+            ++JobNumber;
+            return "job" + JobNumber;
+
+        }
         static void HandleSocket(Object sock)
         {
+            var networkStream = new NetworkStream(sock as Socket);
+            var writer = new StreamWriter(networkStream);
+            var reader = new StreamReader(networkStream);
 
             var pth = TempFileUtil.GetTempFileName();
 
-            byte[] buf = new byte[1024];
-            var s = sock as Socket;
-            try
+            void copyBulkStreamToNewFile(string fname)
             {
                 using (var f = File.OpenWrite(pth))
+                using (var fwriter = new StreamWriter(f))
                 {
-                    while (true)
-                    {
-                        int len = s.Receive(buf, SocketFlags.None);
-                        f.Write(buf, 0, len);
-                        if (len < buf.Length)
-                        {
-                            break;
-                        }
-
-                    }
+                    RespProtocol.ReadBulkString(reader, fwriter);
                 }
-                Console.WriteLine(pth);
+            }
 
-                using (var responseStream = new StreamWriter(new NetworkStream(s)))
+            while (true)
+            {
+                // main command - handle loop
+                var cmd = RespProtocol.ReadSimpleString(reader);
+                // 1: run simple script
+                if (cmd == "run")
                 {
-                    HandleStoredFile(pth, responseStream);
-                    responseStream.Flush();
-                    responseStream.Close();
+                    copyBulkStreamToNewFile(pth);
+                    HandleStoredFile(pth, writer);
                 }
-                s.Close();
+                if (cmd == "ziprun")
+                {
+                    copyBulkStreamToNewFile(pth);
+                    HandleZipFile(pth, writer);
+                }
+
+
             }
-            catch (SocketException)
-            {
-                // ...
-            } finally
-            {
-                //File.Delete(pth);
-            }
+        }
+
+        class AppConfig
+        {
+            public int Port;
+            public string Password; 
 
         }
 
+        static AppConfig Config = new AppConfig
+        {
+            Port = 19800,
+            Password = "helo"
+        };
+
         static async Task Loop()
         {
-            var port = 19800;
+            var port = Config.Port;
             Console.WriteLine($"EWinRM listening for TCP on port {port}");
             var t = new TcpListener(IPAddress.Any, port);
             t.Start();
