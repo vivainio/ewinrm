@@ -28,7 +28,7 @@ namespace EWinRM
             }
         }
 
-        public static void RunProcess(StreamWriter outstream, Action<ProcessStartInfo> decorateFn)
+        public static int RunProcess(StreamWriter outstream, Action<ProcessStartInfo> decorateFn)
         {
             var p = new Process();
             p.StartInfo.RedirectStandardOutput = true;
@@ -39,7 +39,8 @@ namespace EWinRM
             CopyStream(outstream, p.StandardOutput);
             CopyStream(outstream, p.StandardError);
             outstream.Flush();
-            outstream.Close();
+            p.WaitForExit();
+            return p.ExitCode;            
         }
     }
 
@@ -68,7 +69,17 @@ namespace EWinRM
 
     class Program
     {
-        
+
+        public static void RunProcessAndWriteExitCode(StreamWriter outstream, Action<ProcessStartInfo> decorateFn)
+        {
+            int code = PsUtil.RunProcess(outstream, decorateFn);
+            if (code != 0)
+            {
+                outstream.Write($"\nEE EXITCODE: {code}.");
+                
+            }
+        }
+
         static void HandleZipFile(string pth, StreamWriter resp)
         {
             var targetDir = TempFileUtil.CreateTempDir();
@@ -89,7 +100,7 @@ namespace EWinRM
                 
             }
 
-            PsUtil.RunProcess(resp, psi =>
+            RunProcessAndWriteExitCode(resp, psi =>
             {
                 psi.WorkingDirectory = targetDir;
                 psi.FileName = "cmd"; 
@@ -104,8 +115,8 @@ namespace EWinRM
             string prefix;
             using (var f = File.OpenRead(pth))
             {
-                byte[] prefixBuf = new byte[2];
-                int len = f.Read(prefixBuf, 0, 2);
+                byte[] prefixBuf = new byte[3];
+                int len = f.Read(prefixBuf, 0, 3);
                 if (len < 3) {
                     resp.Write("EE: Script must have at least 3 characters");
                     return;
@@ -126,11 +137,22 @@ namespace EWinRM
 
             }
 
+            // python 
+            if (prefix.StartsWith("#!p"))
+            {
+                RunProcessAndWriteExitCode(resp, psi =>
+                {
+                    psi.FileName = "python";
+                    psi.Arguments = pth;
+                });
+                return;
+            }
+
             // unknown profix, let's handle it as bat
             var newName = pth + ".cmd";
             File.Move(pth, newName);
 
-            PsUtil.RunProcess(resp, psi =>
+            RunProcessAndWriteExitCode(resp, psi =>
             {
                 psi.FileName = "cmd";
                 psi.Arguments = "/c " + newName;
@@ -153,7 +175,6 @@ namespace EWinRM
                     while (true)
                     {
                         int len = s.Receive(buf, SocketFlags.None);
-                        Console.WriteLine($"Got {len}");
                         f.Write(buf, 0, len);
                         if (len < buf.Length)
                         {
@@ -167,6 +188,8 @@ namespace EWinRM
                 using (var responseStream = new StreamWriter(new NetworkStream(s)))
                 {
                     HandleStoredFile(pth, responseStream);
+                    responseStream.Flush();
+                    responseStream.Close();
                 }
                 s.Close();
             }
@@ -183,7 +206,7 @@ namespace EWinRM
         static async Task Loop()
         {
             var port = 19800;
-            Console.WriteLine("EWinRM listening for TCP on port 19800");
+            Console.WriteLine($"EWinRM listening for TCP on port {port}");
             var t = new TcpListener(IPAddress.Any, port);
             t.Start();
             while (true)

@@ -1,0 +1,1 @@
+echo "plain bat script"

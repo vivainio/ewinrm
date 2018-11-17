@@ -1,0 +1,1 @@
+echo "This is a text file embedded in t2"
