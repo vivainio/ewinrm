@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -41,10 +42,10 @@ namespace EWinRM
             outstream.Close();
         }
     }
-    class Program
-    {
 
-        static string WorkPath()
+    class TempFileUtil
+    {
+        public static string WorkPath()
         {
             var p = Path.Combine(Path.GetTempPath(), "EWinRmFiles");
             if (!Directory.Exists(p))
@@ -54,48 +55,81 @@ namespace EWinRM
             return p;
         }
 
-        static string CreateTempDir()
+        public static string CreateTempDir()
         {
             var p = Path.Combine(WorkPath(), Path.GetRandomFileName());
             Directory.CreateDirectory(p);
             return p;
         }
 
+        public static string GetTempFileName() => Path.Combine(WorkPath(), Path.GetRandomFileName());
 
+    }
 
+    class Program
+    {
+        
         static void HandleZipFile(string pth, StreamWriter resp)
         {
-            var targetDir = CreateTempDir();
+            var targetDir = TempFileUtil.CreateTempDir();
             Console.WriteLine($"Unzip {pth} to {targetDir}");
 
-            ZipFile.ExtractToDirectory(pth, targetDir);
+            try
+            {
+                ZipFile.ExtractToDirectory(pth, targetDir);
+            } catch (InvalidDataException ex) {
+                resp.Write($"EE: invalid zip file: {ex.Message}");
+                return;
+            }
+            var autoexec = Path.Combine(targetDir, "autoexec.cmd");
+            if (!File.Exists(autoexec))
+            {
+                resp.Write("EE: Missing autoexec.cmd from zip");
+                return;
+                
+            }
+
+            PsUtil.RunProcess(resp, psi =>
+            {
+                psi.WorkingDirectory = targetDir;
+                psi.FileName = "cmd"; 
+                psi.Arguments = "/c autoexec.cmd";
+            });
+
+
         }
 
         static void HandleStoredFile(string pth, StreamWriter resp)
         {
-            var iszip = false;
+            string prefix;
             using (var f = File.OpenRead(pth))
             {
-                byte[] prefix = new byte[2];
-                int len = f.Read(prefix, 0, 2);
-                if (prefix[0] == 'P' && prefix[1] == 'K')
-                {
-                    iszip = true;
+                byte[] prefixBuf = new byte[2];
+                int len = f.Read(prefixBuf, 0, 2);
+                if (len < 3) {
+                    resp.Write("EE: Script must have at least 3 characters");
+                    return;
                 }
+                prefix = Encoding.ASCII.GetString(prefixBuf);
             }
-            if (iszip)
-            {
-                HandleZipFile(pth, resp);
-            } else
-            {
-                HandleBatFile(pth, resp);
-            }
+            HandleScriptFile(prefix, pth, resp);
         }
 
-        private static void HandleBatFile(string pth, StreamWriter resp)
+        private static void HandleScriptFile(string prefix, string pth, StreamWriter resp)
         {
-            var newName =   pth + ".cmd";
+
+            // PK prefix is zip file
+            if (prefix.StartsWith("PK"))
+            {
+                HandleZipFile(pth, resp);
+                return;
+
+            }
+
+            // unknown profix, let's handle it as bat
+            var newName = pth + ".cmd";
             File.Move(pth, newName);
+
             PsUtil.RunProcess(resp, psi =>
             {
                 psi.FileName = "cmd";
@@ -107,7 +141,8 @@ namespace EWinRM
 
         static void HandleSocket(Object sock)
         {
-            var pth = Path.GetTempFileName();
+
+            var pth = TempFileUtil.GetTempFileName();
 
             byte[] buf = new byte[1024];
             var s = sock as Socket;
@@ -129,11 +164,13 @@ namespace EWinRM
                 }
                 Console.WriteLine(pth);
 
-                var responseStream = new StreamWriter(new NetworkStream(s));
-                HandleStoredFile(pth, responseStream);
+                using (var responseStream = new StreamWriter(new NetworkStream(s)))
+                {
+                    HandleStoredFile(pth, responseStream);
+                }
                 s.Close();
-
-            } catch (SocketException)
+            }
+            catch (SocketException)
             {
                 // ...
             } finally
@@ -145,7 +182,9 @@ namespace EWinRM
 
         static async Task Loop()
         {
-            var t = new TcpListener(IPAddress.Any, 19800);
+            var port = 19800;
+            Console.WriteLine("EWinRM listening for TCP on port 19800");
+            var t = new TcpListener(IPAddress.Any, port);
             t.Start();
             while (true)
             {
