@@ -20,7 +20,7 @@ def connect(addr, port):
 
 
 def send_bulk_string(sock, text):
-    sock.send("$" + str(len(text)) + "\r\n" + text)
+    sock.sendall("$" + str(len(text)) + "\r\n" + text)
 
 def send(addr, port, command, text):
     s = connect(addr, port)
@@ -28,18 +28,21 @@ def send(addr, port, command, text):
     send_bulk_string(s, text)
     print s.recv(2000)
 
-PORT = 19800
+PORT = 19802
 
 def sendfile(command, fname):
     print "Running", command, fname
-    return send("localhost", PORT, command, open(fname, "rb").read())
+    cont = open(fname, "rb").read()
+    print "Sending", len(cont)
+
+    return send("localhost", PORT, command, cont)
 
 
-sendfile("run", "t4.py")
-sendfile("run", "t3.cmd")
+#sendfile("run", "t4.py")
+#sendfile("run", "t3.cmd")
 
-create_zips()
-sendfile("run", "t1.zip")
-sendfile("run", "t2.zip")
+#create_zips()
+#sendfile("ziprun", "t1.zip")
+sendfile("ziprun", "t2.zip")
 
 
