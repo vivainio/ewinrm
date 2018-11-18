@@ -58,7 +58,7 @@ namespace EWinRM
 
             AssertPrefix(line, '$');
             var numstring = Int32.Parse(line.Substring(1).TrimEnd());
-            PsUtil.CopyStreamNBytes(dest, src, numstring);
+            StreamUtil.CopyStreamNBytes(dest, src, numstring);
         }
         public static string ReadSimpleString(BinaryReader src)
         {
@@ -68,8 +68,16 @@ namespace EWinRM
 
             return line.Substring(1);
         }
+
+        public static void WriteBulkString(BinaryWriter dest, BinaryReader src, int count)
+        {
+            var prefix = Encoding.UTF8.GetBytes("$" + count + "\r\n");
+            dest.Write(prefix);
+            StreamUtil.CopyStreamNBytes(dest, src, count);
+        }
     }
-    class PsUtil
+
+    public static class StreamUtil
     {
         public static void CopyStreamNBytes(BinaryWriter dest, BinaryReader src, int nbytes)
         {
@@ -94,7 +102,7 @@ namespace EWinRM
         public static void CopyStreamAsUtf(BinaryWriter dest, StreamReader src)
         {
             char[] buf = new char[1024];
-            
+
             while (!src.EndOfStream)
             {
                 int len = src.Read(buf, 0, buf.Length);
@@ -102,6 +110,11 @@ namespace EWinRM
             }
         }
 
+
+
+    }
+    class PsUtil
+    {
 
         public static int RunProcess(BinaryWriter outstream, Action<ProcessStartInfo> decorateFn)
         {
@@ -111,8 +124,8 @@ namespace EWinRM
             p.StartInfo.UseShellExecute = false;
             decorateFn(p.StartInfo);
             p.Start();
-            CopyStreamAsUtf(outstream, p.StandardOutput);
-            CopyStreamAsUtf(outstream, p.StandardError);
+            StreamUtil.CopyStreamAsUtf(outstream, p.StandardOutput);
+            StreamUtil.CopyStreamAsUtf(outstream, p.StandardError);
             outstream.Flush();
             p.WaitForExit();
             return p.ExitCode;            
@@ -245,6 +258,12 @@ namespace EWinRM
             }
         }
 
+        static void HandleSocketOuterUnsafe(Object sock)
+        {
+            var s = sock as Socket;
+            HandleSocket(sock as Socket);
+        }
+
 
         static void HandleSocket(Socket sock)
         {
@@ -266,6 +285,7 @@ namespace EWinRM
             {
                 // main command - handle loop
                 var cmd = RespProtocol.ReadSimpleString(reader);
+                var cmdParts = cmd.Split(new char[] { ' ' }, 2);
                 Console.WriteLine($"Command: {cmd}");
                 // 1: run simple script
                 if (cmd == "run")
@@ -283,9 +303,32 @@ namespace EWinRM
                     writer.Close();
                     break;
                 }
+                if (cmdParts[0] == "save")
+                {
+                    copyBulkStreamToNewFile(cmdParts[1]);
+                    writer.Close();
+                    break;
+                }
+
+                if (cmdParts[0] == "get")
+                {
+                    HandleGet(cmdParts[1], writer);
+                    writer.Close();
+                    break;
+                }
+
                 Console.WriteLine($"Unknown command: {cmd}");
 
 
+            }
+        }
+
+        private static void HandleGet(string pth, BinaryWriter writer)
+        {
+            var size = (int) new FileInfo(pth).Length;
+            using (var fstream = new BinaryReader(File.OpenRead(pth)))
+            {
+                RespProtocol.WriteBulkString(writer, fstream, size);
             }
         }
 
@@ -311,7 +354,7 @@ namespace EWinRM
             while (true)
             {
                 var sock = await t.AcceptSocketAsync();
-                new Thread(new ParameterizedThreadStart(HandleSocketOuter)).Start(sock);
+                new Thread(new ParameterizedThreadStart(HandleSocketOuterUnsafe)).Start(sock);
             }
         }
         static void Main(string[] args)
