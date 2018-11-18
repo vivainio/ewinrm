@@ -26,7 +26,7 @@ def send(addr, port, command, text):
     s = connect(addr, port)
     s.send("+%s\r\n" % command)
     send_bulk_string(s, text)
-    print s.recv(2000)
+    print "Repl:", `s.recv(2000)`
 
 PORT = 19802
 
@@ -38,11 +38,11 @@ def sendfile(command, fname):
     return send("localhost", PORT, command, cont)
 
 
-#sendfile("run", "t4.py")
-#sendfile("run", "t3.cmd")
+sendfile("run", "t4.py")
+sendfile("run", "t3.cmd")
 
 #create_zips()
-#sendfile("ziprun", "t1.zip")
+sendfile("ziprun", "t1.zip")
 sendfile("ziprun", "t2.zip")
 
 

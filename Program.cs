@@ -98,7 +98,6 @@ namespace EWinRM
             while (!src.EndOfStream)
             {
                 int len = src.Read(buf, 0, buf.Length);
-                dest.Write(buf);
                 dest.Write(buf, 0, len);
             }
         }
